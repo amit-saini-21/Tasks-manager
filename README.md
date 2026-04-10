@@ -50,6 +50,12 @@ pip install -r requirements.txt
 python app.py
 ```
 
+## Render Deployment
+
+- Python runtime is pinned in `runtime.txt` to `python-3.10.14`.
+- Install command: `pip install -r requirements.txt`
+- Start command (from Procfile): `gunicorn app:app`
+
 ## Environment Variables
 
 - `SECRET_KEY` - Flask/JWT secret key

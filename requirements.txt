@@ -1,7 +1,6 @@
-Flask==3.0.3
-PyJWT==2.9.0
-python-dotenv==1.0.1
-Werkzeug==3.0.4
+Flask==2.3.3
+PyJWT==2.8.0
+python-dotenv==1.0.0
+Werkzeug==2.3.8
 psycopg2-binary==2.9.9
-google-genai==0.8.0
-gunicorn==22.0.0
+gunicorn==21.2.0
