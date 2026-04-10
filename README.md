@@ -1,6 +1,6 @@
 # Notes API
 
-A Flask-based REST API for user authentication, notes, tasks, and AI-powered productivity suggestions.
+A Flask-based REST API for user authentication, notes, and tasks.
 
 ## Features
 
@@ -9,7 +9,6 @@ A Flask-based REST API for user authentication, notes, tasks, and AI-powered pro
 - CRUD operations for tasks
 - Bulk delete for notes and tasks
 - Health and user-info endpoints
-- AI suggestions for general prompts, note improvement, and task planning
 
 ## Tech Stack
 
@@ -17,7 +16,6 @@ A Flask-based REST API for user authentication, notes, tasks, and AI-powered pro
 - PostgreSQL via psycopg2
 - PyJWT
 - python-dotenv
-- Google GenAI
 
 ## Project Structure
 
@@ -31,7 +29,6 @@ routes/
   notes.py
   tasks.py
   other.py
-  ai.py
 utils/
   hash.py
   jwt_handler.py
@@ -57,9 +54,6 @@ python app.py
 
 - `SECRET_KEY` - Flask/JWT secret key
 - `DATABASE_URI` - PostgreSQL connection string, for example `postgresql://user:password@localhost:5432/notes_api`
-- `GEMINI_API_KEY` - Google Gemini API key used by the AI routes
-- `GEMINI_MODEL` - Optional Gemini model name, defaults to `gemini-3-flash-preview`
-
 
 ## Authentication Flow
 
@@ -108,6 +102,12 @@ Authorization: Bearer <your_token>
 | DELETE | `/api/tasks/<int:task_id>` | Yes | Delete a single task owned by the authenticated user. | None |
 | DELETE | `/api/tasks/bulk` | Yes | Delete multiple tasks by ID. | `task_ids` as a list |
 
+## Ownership Model
+
+- Authenticated routes use the `user_id` from the JWT token, not a client-supplied value.
+- Notes and tasks are always filtered by the current user's `user_id`.
+- Create, update, delete, and bulk operations are restricted to records owned by that `user_id`.
+- The API never expects `user_id` in request bodies for protected note or task operations.
 
 ## Example Requests
 
@@ -119,9 +119,3 @@ curl -X POST http://localhost:5000/api/notes \
   -H "Authorization: Bearer <token>" \
   -d '{"title":"Meeting notes","content":"Discuss roadmap and launch steps"}'
 ```
-
-## Notes
-
-- The AI routes require `GEMINI_API_KEY` in the environment.
-- AI responses return a 429 status with guidance when the Gemini project quota is exhausted.
-- The AI blueprint is registered in `app.py`, so all documented AI routes are active.
