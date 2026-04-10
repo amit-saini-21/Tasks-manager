@@ -26,4 +26,4 @@ def close_db_connection():
 atexit.register(close_db_connection)
 
 if __name__ == '__main__':
-    app.run(debug=True, port=5000, use_reloader=False)
+    app.run(debug=False, port=5000, use_reloader=False)
