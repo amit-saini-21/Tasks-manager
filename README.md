@@ -33,7 +33,10 @@ utils/
   hash.py
   jwt_handler.py
 ```
-
+## API
+```bash
+https://tasks-manager-30hc.onrender.com
+```
 ## Setup
 
 1. Create and activate a virtual environment.
