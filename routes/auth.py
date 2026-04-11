@@ -1,5 +1,6 @@
 from flask import Blueprint, request, jsonify
 import werkzeug
+from psycopg2 import IntegrityError
 import utils.hash as hash_utils
 import utils.jwt_handler as jwt_handler
 import models
@@ -10,7 +11,7 @@ db = models.user_repo
 
 @auth_bp.route('/api/signup', methods=['POST'])
 def signup():
-    data = request.get_json() or {}
+    data = request.get_json(silent=True) or {}
     email = (data.get('email') or '').strip().lower()
     username = (data.get('username') or '').strip()
     password = data.get('password') or ''
@@ -42,14 +43,17 @@ def signup():
         "username": username,
         "password": generate_hashed_password
     }
-    db.save(data_to_save)
+    try:
+        db.save(data_to_save)
+    except IntegrityError:
+        return jsonify({"error": "User already exists with provided email or username"}), 409
 
     return jsonify({"message": "User registered successfully"}), 201
 
 
 @auth_bp.route('/api/login', methods=['POST'])
 def login():
-    data = request.get_json() or {}
+    data = request.get_json(silent=True) or {}
     email = (data.get('email') or "").strip().lower()
     username = (data.get('username') or "").strip()
     password = data.get('password') or ""

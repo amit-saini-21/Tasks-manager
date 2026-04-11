@@ -5,6 +5,25 @@ import models
 notes_bp = Blueprint("notes", __name__)
 db = models.notes_repo
 
+
+def _validate_note_payload(payload):
+    title = (payload.get("title") or "").strip()
+    content = (payload.get("content") or "").strip()
+    if not title or not content:
+        return None, None
+    return title, content
+
+
+def _parse_id_list(raw_ids):
+    if not isinstance(raw_ids, list) or not raw_ids:
+        return None
+    parsed_ids = []
+    for value in raw_ids:
+        if not isinstance(value, int) or value <= 0:
+            return None
+        parsed_ids.append(value)
+    return list(dict.fromkeys(parsed_ids))
+
 @notes_bp.route('/api/notes', methods=['GET'])
 @jwt_handler.token_required
 def get_notes(current_user):
@@ -20,9 +39,8 @@ def get_notes(current_user):
 @notes_bp.route('/api/notes', methods=['POST'])
 @jwt_handler.token_required
 def create_note(current_user):
-    payload = request.get_json() or {}
-    title = payload.get("title")
-    content = payload.get("content")
+    payload = request.get_json(silent=True) or {}
+    title, content = _validate_note_payload(payload)
 
     if not title or not content:
         return jsonify({"error": "title and content are required"}), 400
@@ -40,9 +58,8 @@ def create_note(current_user):
 @jwt_handler.token_required
 def modify_note(current_user, note_id):
     if request.method == 'PUT':
-        payload = request.get_json() or {}
-        title = payload.get("title")
-        content = payload.get("content")
+        payload = request.get_json(silent=True) or {}
+        title, content = _validate_note_payload(payload)
 
         if not title or not content:
             return jsonify({"error": "title and content are required"}), 400
@@ -71,12 +88,12 @@ def modify_note(current_user, note_id):
 @notes_bp.route('/api/notes/bulk', methods = ['DELETE'])
 @jwt_handler.token_required
 def bulk_delete_notes(current_user):
-    payload = request.get_json()
-    note_ids = payload.get("note_ids")
+    payload = request.get_json(silent=True) or {}
+    note_ids = _parse_id_list(payload.get("note_ids"))
 
-    if not note_ids or not isinstance(note_ids, list):
-        return jsonify({"error": "note_ids must be a list of IDs"}), 400
+    if note_ids is None:
+        return jsonify({"error": "note_ids must be a non-empty list of positive integer IDs"}), 400
     
-    deleted_count = db.bulk_delete_notes(note_ids, current_user["id"])
-    return jsonify({"message": f"{deleted_count} notes deleted successfully"}), 200
+    deleted_ids = db.bulk_delete_notes(note_ids, current_user["id"])
+    return jsonify({"message": f"{len(deleted_ids)} notes deleted successfully", "deleted_ids": deleted_ids}), 200
 
