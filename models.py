@@ -344,6 +344,16 @@ class InMemoryNotesRepository:
     def find_notes_by_user_id(self, user_id):
         return [note for note in self._notes if note.get("user_id") == user_id]
     
+    def bulk_delete_notes(self, notes_ids, user_id):
+        deleted_ids = []
+        for note_id in notes_ids:
+            for i, note in enumerate(self._notes):
+                if note["id"] == note_id and note["user_id"] == user_id:
+                    del self._notes[i]
+                    deleted_ids.append(note_id)
+                    break
+        return deleted_ids
+    
 class InMemoryTaskRepository:
     def __init__(self):
         self._tasks = []
@@ -383,6 +393,15 @@ class InMemoryTaskRepository:
     def find_tasks_by_status(self, user_id, status):
         return [task for task in self._tasks if task.get("user_id") == user_id and task.get("status") == status]
 
+    def bulk_delete_tasks(self, task_ids, user_id):
+        deleted_ids = []
+        for task_id in task_ids:
+            for i, task in enumerate(self._tasks):
+                if task["id"] == task_id and task["user_id"] == user_id:
+                    del self._tasks[i]
+                    deleted_ids.append(task_id)
+                    break
+        return deleted_ids
 
 
 shared_conn = None
