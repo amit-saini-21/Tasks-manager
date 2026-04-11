@@ -4,34 +4,70 @@ from dotenv import load_dotenv
 import psycopg2
 from psycopg2 import Error as PsycopgError
 from psycopg2.extras import RealDictCursor
+from psycopg2 import pool as pg_pool
 
 
 load_dotenv()
 
 
-class PostgresUserRepository:
-    def __init__(self, conn):
-        self._conn = conn
+class _PooledRepository:
+    def __init__(self, conn_pool):
+        self._pool = conn_pool
+
+    def _run_read(self, operation):
+        conn = None
+        try:
+            conn = self._pool.getconn()
+            return operation(conn)
+        except PsycopgError:
+            if conn is not None and not conn.closed:
+                conn.rollback()
+            raise
+        finally:
+            if conn is not None:
+                self._pool.putconn(conn)
+
+    def _run_write(self, operation):
+        conn = None
+        try:
+            conn = self._pool.getconn()
+            result = operation(conn)
+            conn.commit()
+            return result
+        except PsycopgError:
+            if conn is not None and not conn.closed:
+                conn.rollback()
+            raise
+        finally:
+            if conn is not None:
+                self._pool.putconn(conn)
+
+
+class PostgresUserRepository(_PooledRepository):
+    def __init__(self, conn_pool):
+        super().__init__(conn_pool)
         self._ensure_schema()
 
     def _ensure_schema(self):
-        with self._conn.cursor() as cursor:
-            cursor.execute(
-                """
-                CREATE TABLE IF NOT EXISTS users (
-                    id SERIAL PRIMARY KEY,
-                    email TEXT UNIQUE NOT NULL,
-                    username TEXT UNIQUE NOT NULL,
-                    password TEXT NOT NULL,
-                    created_at TIMESTAMPTZ DEFAULT NOW()
-                );
-                """
-            )
-        self._conn.commit()
+        def operation(conn):
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS users (
+                        id SERIAL PRIMARY KEY,
+                        email TEXT UNIQUE NOT NULL,
+                        username TEXT UNIQUE NOT NULL,
+                        password TEXT NOT NULL,
+                        created_at TIMESTAMPTZ DEFAULT NOW()
+                    );
+                    """
+                )
+
+        self._run_write(operation)
 
     def save(self, user_data):
-        try:
-            with self._conn.cursor(cursor_factory=RealDictCursor) as cursor:
+        def operation(conn):
+            with conn.cursor(cursor_factory=RealDictCursor) as cursor:
                 cursor.execute(
                     """
                     INSERT INTO users (email, username, password)
@@ -40,85 +76,79 @@ class PostgresUserRepository:
                     """,
                     (user_data["email"], user_data["username"], user_data["password"]),
                 )
-                user = cursor.fetchone()
-            self._conn.commit()
-            return user
-        except PsycopgError:
-            self._conn.rollback()
-            raise
-    
+                return cursor.fetchone()
+
+        return self._run_write(operation)
 
     def find_user_by_username(self, username):
-        try:
-            with self._conn.cursor(cursor_factory=RealDictCursor) as cursor:
+        def operation(conn):
+            with conn.cursor(cursor_factory=RealDictCursor) as cursor:
                 cursor.execute(
                     "SELECT id, email, username, password FROM users WHERE username = %s;",
                     (username,),
                 )
                 return cursor.fetchone()
-        except PsycopgError:
-            self._conn.rollback()
-            raise
 
+        return self._run_read(operation)
 
     def find_user_by_id(self, user_id):
-        try:
-            with self._conn.cursor(cursor_factory=RealDictCursor) as cursor:
+        def operation(conn):
+            with conn.cursor(cursor_factory=RealDictCursor) as cursor:
                 cursor.execute(
                     "SELECT id, email, username, password FROM users WHERE id = %s;",
                     (user_id,),
                 )
                 return cursor.fetchone()
-        except PsycopgError:
-            self._conn.rollback()
-            raise
+
+        return self._run_read(operation)
 
     def find_user_by_email(self, email):
-        try:
-            with self._conn.cursor(cursor_factory=RealDictCursor) as cursor:
+        def operation(conn):
+            with conn.cursor(cursor_factory=RealDictCursor) as cursor:
                 cursor.execute(
                     "SELECT id, email, username, password FROM users WHERE email = %s;",
                     (email,),
                 )
                 return cursor.fetchone()
-        except PsycopgError:
-            self._conn.rollback()
-            raise
+
+        return self._run_read(operation)
 
     def all_users(self):
-        try:
-            with self._conn.cursor(cursor_factory=RealDictCursor) as cursor:
+        def operation(conn):
+            with conn.cursor(cursor_factory=RealDictCursor) as cursor:
                 cursor.execute("SELECT id, email, username FROM users;")
                 return cursor.fetchall()
-        except PsycopgError:
-            self._conn.rollback()
-            raise
 
-   
-class PostgresNotesRepository:
-    def __init__(self, conn):
-        self._conn = conn
+        return self._run_read(operation)
+
+
+class PostgresNotesRepository(_PooledRepository):
+    def __init__(self, conn_pool):
+        super().__init__(conn_pool)
         self._ensure_schema()
         self._notes = []
+
     def _ensure_schema(self):
-        with self._conn.cursor() as cursor:
-            cursor.execute(
-                """
-                CREATE TABLE IF NOT EXISTS notes (
-                    id SERIAL PRIMARY KEY,
-                    title TEXT NOT NULL,
-                    content TEXT NOT NULL,
-                    user_id  INTEGER REFERENCES users(id),
-                    created_at TIMESTAMPTZ DEFAULT NOW(),
-                    updated_at TIMESTAMPTZ DEFAULT NOW()
-                );
-                """
-            )
-        self._conn.commit()
+        def operation(conn):
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS notes (
+                        id SERIAL PRIMARY KEY,
+                        title TEXT NOT NULL,
+                        content TEXT NOT NULL,
+                        user_id  INTEGER REFERENCES users(id),
+                        created_at TIMESTAMPTZ DEFAULT NOW(),
+                        updated_at TIMESTAMPTZ DEFAULT NOW()
+                    );
+                    """
+                )
+
+        self._run_write(operation)
 
     def save_notes(self, note_data):
-        try:
-            with self._conn.cursor(cursor_factory=RealDictCursor) as cursor:
+        def operation(conn):
+            with conn.cursor(cursor_factory=RealDictCursor) as cursor:
                 cursor.execute(
                     """
                     INSERT INTO notes (title, content, user_id)
@@ -127,31 +157,28 @@ class PostgresNotesRepository:
                     """,
                     (note_data["title"], note_data["content"], note_data["user_id"]),
                 )
-                saved_note = cursor.fetchone()
-            self._conn.commit()
-        except PsycopgError:
-            self._conn.rollback()
-            raise
+                return cursor.fetchone()
+
+        saved_note = self._run_write(operation)
         self._notes.append(saved_note)
         return saved_note
 
     def find_notes_by_user_id(self, id):
-        try:
-            with self._conn.cursor(cursor_factory=RealDictCursor) as cursor:
+        def operation(conn):
+            with conn.cursor(cursor_factory=RealDictCursor) as cursor:
                 cursor.execute(
                     "SELECT id, title, content, user_id, created_at, updated_at FROM notes WHERE user_id = %s ORDER BY id DESC;",
                     (id,),
                 )
-                notes = cursor.fetchall()
-        except PsycopgError:
-            self._conn.rollback()
-            raise
+                return cursor.fetchall()
+
+        notes = self._run_read(operation)
         self._notes = notes
         return notes
-    
+
     def update_note(self, note_data):
-        try:
-            with self._conn.cursor(cursor_factory=RealDictCursor) as cursor:
+        def operation(conn):
+            with conn.cursor(cursor_factory=RealDictCursor) as cursor:
                 cursor.execute(
                     """
                     UPDATE notes
@@ -161,16 +188,13 @@ class PostgresNotesRepository:
                     """,
                     (note_data["title"], note_data["content"], note_data["id"], note_data["user_id"]),
                 )
-                updated_note = cursor.fetchone()
-            self._conn.commit()
-            return updated_note
-        except PsycopgError:
-            self._conn.rollback()
-            raise
+                return cursor.fetchone()
+
+        return self._run_write(operation)
 
     def delete_note(self, note_id, user_id):
-        try:
-            with self._conn.cursor(cursor_factory=RealDictCursor) as cursor:
+        def operation(conn):
+            with conn.cursor(cursor_factory=RealDictCursor) as cursor:
                 cursor.execute(
                     """
                     DELETE FROM notes
@@ -180,56 +204,55 @@ class PostgresNotesRepository:
                     (note_id, user_id),
                 )
                 deleted_note = cursor.fetchone()
-            self._conn.commit()
             return bool(deleted_note)
-        except PsycopgError:
-            self._conn.rollback()
-            raise
-    
+
+        return self._run_write(operation)
+
     def bulk_delete_notes(self, notes_ids, user_id):
-        try:
-            with self._conn.cursor(cursor_factory=RealDictCursor) as cursor:
+        def operation(conn):
+            with conn.cursor(cursor_factory=RealDictCursor) as cursor:
                 cursor.execute(
                     """
                     DELETE FROM notes
                     WHERE id = ANY(%s) and user_id = %s
                     RETURNING id;
                     """,
-                    (notes_ids,user_id)
+                    (notes_ids, user_id)
                 )
                 deleted_notes = cursor.fetchall()
-            self._conn.commit()
             return [note["id"] for note in deleted_notes]
-        except PsycopgError:
-            self._conn.rollback()
-            raise
 
-class PostgresTaskRepository:
-    def __init__(self, conn):
-        self.__conn = conn
+        return self._run_write(operation)
+
+
+class PostgresTaskRepository(_PooledRepository):
+    def __init__(self, conn_pool):
+        super().__init__(conn_pool)
         self._ensure_schema()
 
     def _ensure_schema(self):
-        with self.__conn.cursor(cursor_factory=RealDictCursor) as cursor:
-            cursor.execute(
-                """
-                CREATE TABLE IF NOT EXISTS tasks (
-                    id SERIAL PRIMARY KEY,
-                    title TEXT NOT NULL,
-                    description TEXT,
-                    status TEXT NOT NULL DEFAULT 'pending',
-                    due_date DATE,
-                    user_id INTEGER REFERENCES users(id),
-                    created_at TIMESTAMPTZ DEFAULT NOW(),
-                    updated_at TIMESTAMPTZ DEFAULT NOW()
-                );
-                """
-            )
-        self.__conn.commit()
+        def operation(conn):
+            with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+                cursor.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS tasks (
+                        id SERIAL PRIMARY KEY,
+                        title TEXT NOT NULL,
+                        description TEXT,
+                        status TEXT NOT NULL DEFAULT 'pending',
+                        due_date DATE,
+                        user_id INTEGER REFERENCES users(id),
+                        created_at TIMESTAMPTZ DEFAULT NOW(),
+                        updated_at TIMESTAMPTZ DEFAULT NOW()
+                    );
+                    """
+                )
+
+        self._run_write(operation)
 
     def save_task(self, task_data):
-        try:
-            with self.__conn.cursor(cursor_factory=RealDictCursor) as cursor:
+        def operation(conn):
+            with conn.cursor(cursor_factory=RealDictCursor) as cursor:
                 cursor.execute(
                     """
                     INSERT INTO tasks (title, description, status, due_date, user_id)
@@ -244,28 +267,24 @@ class PostgresTaskRepository:
                         task_data["user_id"],
                     ),
                 )
-                task = cursor.fetchone()
-            self.__conn.commit()
-            return task
-        except PsycopgError:
-            self.__conn.rollback()
-            raise
-    
+                return cursor.fetchone()
+
+        return self._run_write(operation)
+
     def find_tasks_by_user_id(self, user_id):
-        try:
-            with self.__conn.cursor(cursor_factory=RealDictCursor) as cursor:
+        def operation(conn):
+            with conn.cursor(cursor_factory=RealDictCursor) as cursor:
                 cursor.execute(
                     "SELECT id, title, description, status, due_date, user_id, created_at, updated_at FROM tasks WHERE user_id = %s ORDER BY id DESC;",
                     (user_id,),
                 )
                 return cursor.fetchall()
-        except PsycopgError:
-            self.__conn.rollback()
-            raise
-    
+
+        return self._run_read(operation)
+
     def update_task(self, task_data):
-        try:
-            with self.__conn.cursor(cursor_factory=RealDictCursor) as cursor:
+        def operation(conn):
+            with conn.cursor(cursor_factory=RealDictCursor) as cursor:
                 cursor.execute(
                     """
                     UPDATE tasks
@@ -282,16 +301,13 @@ class PostgresTaskRepository:
                         task_data["user_id"],
                     ),
                 )
-                updated_task = cursor.fetchone()
-            self.__conn.commit()
-            return updated_task
-        except PsycopgError:
-            self.__conn.rollback()
-            raise
-    
+                return cursor.fetchone()
+
+        return self._run_write(operation)
+
     def delete_task(self, task_id, user_id):
-        try:
-            with self.__conn.cursor(cursor_factory=RealDictCursor) as cursor:
+        def operation(conn):
+            with conn.cursor(cursor_factory=RealDictCursor) as cursor:
                 cursor.execute(
                     """
                     DELETE FROM tasks
@@ -301,15 +317,13 @@ class PostgresTaskRepository:
                     (task_id, user_id),
                 )
                 deleted_task = cursor.fetchone()
-            self.__conn.commit()
             return bool(deleted_task)
-        except PsycopgError:
-            self.__conn.rollback()
-            raise
-    
+
+        return self._run_write(operation)
+
     def find_task_by_id(self, task_id, user_id):
-        try:
-            with self.__conn.cursor(cursor_factory=RealDictCursor) as cursor:
+        def operation(conn):
+            with conn.cursor(cursor_factory=RealDictCursor) as cursor:
                 cursor.execute(
                     """
                     SELECT id, title, description, status, due_date, user_id, created_at, updated_at
@@ -319,12 +333,12 @@ class PostgresTaskRepository:
                     (task_id, user_id),
                 )
                 return cursor.fetchone()
-        except PsycopgError:
-            self.__conn.rollback()
-            raise
-    def bulk_delete_tasks(self,task_ids, user_id):
-        try:
-            with self.__conn.cursor(cursor_factory=RealDictCursor) as cursor:
+
+        return self._run_read(operation)
+
+    def bulk_delete_tasks(self, task_ids, user_id):
+        def operation(conn):
+            with conn.cursor(cursor_factory=RealDictCursor) as cursor:
                 cursor.execute(
                     """
                     DELETE FROM tasks
@@ -334,15 +348,13 @@ class PostgresTaskRepository:
                     (task_ids, user_id),
                 )
                 deleted_tasks = cursor.fetchall()
-            self.__conn.commit()
             return [task["id"] for task in deleted_tasks]
-        except PsycopgError:
-            self.__conn.rollback()
-            raise
-    
+
+        return self._run_write(operation)
+
     def find_tasks_by_status(self, user_id, status):
-        try:
-            with self.__conn.cursor(cursor_factory=RealDictCursor) as cursor:
+        def operation(conn):
+            with conn.cursor(cursor_factory=RealDictCursor) as cursor:
                 cursor.execute(
                     """
                     SELECT id, title, description, status, due_date, user_id, created_at, updated_at
@@ -353,12 +365,8 @@ class PostgresTaskRepository:
                     (user_id, status),
                 )
                 return cursor.fetchall()
-        except PsycopgError:
-            self.__conn.rollback()
-            raise
-    
-        
-    
+
+        return self._run_read(operation)
 
 
 class InMemoryUserRepository:
@@ -473,27 +481,43 @@ class InMemoryTaskRepository:
         return deleted_ids
 
 
-shared_conn = None
+shared_pool = None
 
 
 def close_shared_connection():
-    global shared_conn
-    if shared_conn is not None and not shared_conn.closed:
-        shared_conn.close()
-    shared_conn = None
+    global shared_pool
+    if shared_pool is not None:
+        shared_pool.closeall()
+    shared_pool = None
 
 
 database_uri = os.getenv("DATABASE_URI", "")
 normalized_db_uri = database_uri.replace("postgres://", "postgresql://", 1)
 if normalized_db_uri.startswith("postgresql://"):
+    pool_min = int(os.getenv("DB_POOL_MIN", "1"))
+    pool_max = int(os.getenv("DB_POOL_MAX", "10"))
+    if pool_min < 1:
+        pool_min = 1
+    if pool_max < pool_min:
+        pool_max = pool_min
+
     try:
-        shared_conn = psycopg2.connect(normalized_db_uri, connect_timeout=5)
+        shared_pool = pg_pool.ThreadedConnectionPool(
+            minconn=pool_min,
+            maxconn=pool_max,
+            dsn=normalized_db_uri,
+            connect_timeout=5,
+        )
+        if shared_pool.closed:
+            raise RuntimeError("Database connection pool failed to initialize")
     except PsycopgError as exc:
         raise RuntimeError("Failed to connect to PostgreSQL. Check DATABASE_URI and database availability.") from exc
-    shared_conn.autocommit = False
-    user_repo = PostgresUserRepository(shared_conn)
-    notes_repo = PostgresNotesRepository(shared_conn)
-    tasks_repo = PostgresTaskRepository(shared_conn)
+    except ValueError as exc:
+        raise RuntimeError("Invalid DB_POOL_MIN or DB_POOL_MAX. Both must be integers.") from exc
+
+    user_repo = PostgresUserRepository(shared_pool)
+    notes_repo = PostgresNotesRepository(shared_pool)
+    tasks_repo = PostgresTaskRepository(shared_pool)
 
 else:
     user_repo = InMemoryUserRepository()

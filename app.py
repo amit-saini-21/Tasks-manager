@@ -3,7 +3,6 @@ import atexit
 from flask import Flask, jsonify
 from psycopg2 import Error as PsycopgError
 from psycopg2 import IntegrityError
-from psycopg2 import extensions as pg_extensions
 from werkzeug.exceptions import HTTPException
 
 from config import Config
@@ -40,9 +39,6 @@ def handle_api_error(exc):
 @app.errorhandler(PsycopgError)
 def handle_db_error(exc):
     app.logger.exception("Database error")
-    conn = models.shared_conn
-    if conn is not None and not conn.closed:
-        conn.rollback()
     if isinstance(exc, IntegrityError):
         return jsonify(_error_payload("Database constraint violation")), 409
     return jsonify(_error_payload("Database operation failed")), 500
@@ -56,19 +52,6 @@ def handle_unexpected_error(exc):
     app.logger.exception("Unhandled exception")
     return jsonify(_error_payload("Internal server error")), 500
 
-
-@app.teardown_request
-def cleanup_transaction_state(_exc):
-    conn = models.shared_conn
-    if conn is None or conn.closed:
-        return
-
-    tx_status = conn.get_transaction_status()
-    if tx_status in (
-        pg_extensions.TRANSACTION_STATUS_INERROR,
-        pg_extensions.TRANSACTION_STATUS_INTRANS,
-    ):
-        conn.rollback()
 
 def close_db_connection():
     models.close_shared_connection()
